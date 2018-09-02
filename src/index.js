@@ -1,51 +1,32 @@
-
-// AlaSQL
-// -------
-import alasql from 'alasql'
+import Client_SQLite3 from 'knex/lib/dialects/sqlite3'
 import Knex from 'knex'
-import Client_Postgres from 'knex/lib/dialects/postgres'
-import pick from 'lodash.pick'
-import assign from 'lodash.assign'
-const Promise = Knex.Promise
+import Promise from 'bluebird';
+import RqliteAdapter from './rqlite'
+const {uniqueId} = require('lodash');
 
-const alasqlOptions = Object.keys(alasql.options);
-
-export default class Client_AlaSQL extends Client_Postgres {
+export default class Client_RQLite extends Client_SQLite3 {
   constructor(config) {
     super(config)
-    if (typeof config.options == 'object') {
-      const options = pick(config.options, alasqlOptions)
-      assign(alasql.options, options)
-    }
-    this.name          = config.name || 'knex_database'
-    this.version       = config.version || '1.0'
-    this.displayName   = config.displayName || this.name
-    this.estimatedSize = config.estimatedSize || 5 * 1024 * 1024
+    this.config = config
+    this.connectionString = config.rqliteConnection
   }
 
-  get dialect() { return 'alasql' }
-  get driverName() { return 'alasql' }
+  get dialect() { return 'reqlite' }
+  get driverName() { return 'reqlite' }
 
-  wrapIdentifier(value) {
-    return value !== '*' ? '`' + value.replace(/"/g, '""') + '`' : '*'
+  _driver() {
+    return require('./rqlite')
   }
 
-  // Get a raw connection from the database, returning a promise with the connection object.
+
   acquireConnection() {
-    const completed = new Promise((resolve, reject) => {
-      try {
-        /*jslint browser: true*/
-        var db = alasql.databases[this.name] || new alasql.Database(this.name)
-        resolve(db)
-      } catch (e) {
-        reject(e)
-      }
-    })
-    return {
-      completed: completed
-    }
-  }
-
+    return Promise.resolve()
+        .then(() => {
+            return {
+              __knexUid: uniqueId('__knexUid')
+            }
+        });
+}
   // Used to explicitly close a connection, called internally by the pool
   // when a connection times out or the pool is shutdown.
   releaseConnection() {
@@ -55,35 +36,15 @@ export default class Client_AlaSQL extends Client_Postgres {
   // Runs the query on the specified connection,
   // providing the bindings and any other necessary prep work.
   _query(connection, obj) {
+    const that = this
     return new Promise(function(resolver, rejecter) {
-      if (!connection) return rejecter(new Error('No connection provided.'))
-      try {
-        obj.response = connection.exec(obj.sql, obj.bindings)
+      const sql = Knex(that.config).raw(obj.sql, obj.bindings)
+      RqliteAdapter.exec(that.connectionString, sql.toString()).then(response => {
+        obj.response = response
         resolver(obj)
-      } catch (e) {
-        rejecter(e)
-      }
-    })
-  }
-
-  _stream(connection, sql, stream) {
-    return new Promise((resolver, rejecter) => {
-      stream.on('error', rejecter)
-      stream.on('end', resolver)
-      return this._query(connection, sql).then((obj) => {
-        return this.processResponse(obj)
-      }).map(function(row) {
-        stream.write(row)
-      }).catch(function(err) {
-        stream.emit('error', err)
-      }).then(function() {
-        stream.end()
+      }).catch(error => {
+        rejecter(error)
       })
     })
   }
-
-  processResponse(obj/*, runner*/) {
-    return obj.response
-  }
-
 }
